@@ -9,34 +9,54 @@ import logging
 import requests
 from pymongo import MongoClient
 
-# ✅ تفعيل السجلات
-logging.basicConfig(level=logging.INFO)
-print("🚀 Starting Pi Network Bot...")
+# ✅ نظام logs مفصل
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
-# فحص BOT_TOKEN
+print("=" * 60)
+print("🤖 PI NETWORK BOT STARTING...")
+print("=" * 60)
+
+# فحص المتغيرات البيئية
+print("🔍 CHECKING ENVIRONMENT VARIABLES...")
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
+MONGO_URI = os.environ.get('MONGO_URI')
+
+print(f"BOT_TOKEN: {'✅ Found' if BOT_TOKEN else '❌ MISSING'}")
+print(f"MONGO_URI: {'✅ Found' if MONGO_URI else '❌ MISSING'}")
+
 if not BOT_TOKEN:
-    print("❌ BOT_TOKEN not found!")
+    print("❌ CRITICAL: BOT_TOKEN not found!")
+    exit(1)
+
+if not MONGO_URI:
+    print("❌ CRITICAL: MONGO_URI not found!")
     exit(1)
 
 # 🔗 اتصال MongoDB
-MONGO_URI = os.environ.get('MONGO_URI')
-if not MONGO_URI:
-    print("❌ MONGO_URI not found!")
-    exit(1)
-
 try:
-    client = MongoClient(MONGO_URI)
+    print("🔗 Connecting to MongoDB...")
+    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=10000)
     db = client['pi_network_bot']
     users_collection = db['users']
     vip_packages_collection = db['vip_packages']
     deposit_requests_collection = db['deposit_requests']
-    print("✅ Connected to MongoDB")
+    print("✅ MongoDB connected successfully")
 except Exception as e:
-    print(f"❌ MongoDB error: {e}")
+    print(f"❌ MongoDB connection failed: {e}")
     exit(1)
 
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
+# 🤖 تهيئة البوت
+try:
+    print("🤖 Initializing bot...")
+    bot = telebot.TeleBot(BOT_TOKEN, parse_mode='HTML')
+    bot_info = bot.get_me()
+    print(f"✅ Bot initialized: @{bot_info.username}")
+except Exception as e:
+    print(f"❌ Bot initialization failed: {e}")
+    exit(1)
 
 # 🔐 إعدادات المشرفين
 ADMIN_IDS = [8400225549]
@@ -242,6 +262,7 @@ def show_main_menu(chat_id, message_id=None, user_id=None):
 def handle_start(message):
     try:
         user_id = message.from_user.id
+        print(f"✅ Start command from user: {user_id}")
         handle_referral_system(message)
         update_user(user_id, 
                    first_name=message.from_user.first_name or "", 
@@ -255,6 +276,7 @@ def handle_start(message):
 @bot.callback_query_handler(func=lambda call: call.data == "vip_packages")
 def show_vip_packages(call):
     try:
+        print(f"✅ VIP packages requested by: {call.from_user.id}")
         packages_text = """
 💎 <b>باقات VIP المتاحة:</b>
 
@@ -341,6 +363,7 @@ def send_purchase_request(user_id, package):
 @bot.callback_query_handler(func=lambda call: call.data == "deposit")
 def handle_deposit(call):
     try:
+        print(f"✅ Deposit requested by: {call.from_user.id}")
         deposit_text = f"""
 💳 <b>نظام الإيداع</b>
 
@@ -386,6 +409,7 @@ def handle_send_deposit_proof(call):
 @bot.message_handler(commands=['deposit_proof'])
 def handle_deposit_proof_command(message):
     try:
+        print(f"✅ Deposit proof requested by: {message.from_user.id}")
         bot.reply_to(message, "📸 <b>أرسل صورة إثبات الإيداع الآن</b>\n\nسأقوم بإرسالها للمسؤول للموافقة")
         bot.register_next_step_handler(message, process_deposit_proof)
     except Exception as e:
@@ -600,6 +624,63 @@ def handle_referral(call):
     except Exception as e:
         print(f"❌ Referral error: {e}")
 
+# 🎁 المكافأة اليومية والتعدين
+@bot.callback_query_handler(func=lambda call: call.data == "daily_bonus")
+def handle_daily_bonus(call):
+    try:
+        user = get_user(call.from_user.id)
+        current_time = datetime.now()
+        
+        base_bonus = 0.7
+        package_bonus = 0
+        if user.get('vip_packages'):
+            for package in user['vip_packages']:
+                package_bonus += package.get('daily_bonus', 0)
+        
+        total_bonus = base_bonus + package_bonus
+        
+        if user.get('last_daily_bonus'):
+            last_bonus = datetime.strptime(user['last_daily_bonus'], '%Y-%m-%d %H:%M:%S')
+            if (current_time - last_bonus).total_seconds() < 24 * 3600:
+                next_bonus = last_bonus + timedelta(hours=24)
+                time_left = next_bonus - current_time
+                hours = int(time_left.total_seconds() // 3600)
+                minutes = int((time_left.total_seconds() % 3600) // 60)
+                
+                bot.answer_callback_query(
+                    call.id, 
+                    f"⏳ انتظر {hours:02d}:{minutes:02d} للمكافأة التالية", 
+                    show_alert=True
+                )
+                return
+        
+        new_balance = user['balance'] + total_bonus
+        update_user(
+            call.from_user.id,
+            balance=new_balance,
+            total_earnings=user['total_earnings'] + total_bonus,
+            last_daily_bonus=current_time.strftime('%Y-%m-%d %H:%M:%S')
+        )
+        
+        bonus_text = f"""
+🎁 <b>المكافأة اليومية!</b>
+
+💰 <b>المكافأة الأساسية:</b> 0.70 Pi
+💎 <b>مكافأة الباقات:</b> +{package_bonus:.2f} Pi
+💰 <b>الإجمالي:</b> {total_bonus:.2f} Pi
+
+💵 <b>رصيدك الجديد:</b> {new_balance:.2f} Pi
+📈 <b>قيمته:</b> {get_total_balance_value(new_balance):,.2f} USDT
+
+🕒 <b>عد للمكافأة التالية بعد 24 ساعة</b>
+        """
+        
+        bot.answer_callback_query(call.id, f"🎉 تم استلام {total_bonus:.2f} Pi!")
+        bot.edit_message_text(bonus_text, call.message.chat.id, call.message.message_id)
+        
+    except Exception as e:
+        print(f"❌ Daily bonus error: {e}")
+
 # 🔄 زر الرجوع
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_main")
 def back_to_main(call):
@@ -705,81 +786,59 @@ def handle_unban(message):
     except Exception as e:
         bot.reply_to(message, f"❌ خطأ: {e}")
 
-# 🎁 المكافأة اليومية والتعدين
-@bot.callback_query_handler(func=lambda call: call.data == "daily_bonus")
-def handle_daily_bonus(call):
+# 🎯 أمر الاختبار
+@bot.message_handler(commands=['test', 'debug'])
+def handle_test(message):
     try:
-        user = get_user(call.from_user.id)
-        current_time = datetime.now()
+        user_id = message.from_user.id
+        print(f"✅ Test command from user: {user_id}")
         
-        base_bonus = 0.7
-        package_bonus = 0
-        if user.get('vip_packages'):
-            for package in user['vip_packages']:
-                package_bonus += package.get('daily_bonus', 0)
-        
-        total_bonus = base_bonus + package_bonus
-        
-        if user.get('last_daily_bonus'):
-            last_bonus = datetime.strptime(user['last_daily_bonus'], '%Y-%m-%d %H:%M:%S')
-            if (current_time - last_bonus).total_seconds() < 24 * 3600:
-                next_bonus = last_bonus + timedelta(hours=24)
-                time_left = next_bonus - current_time
-                hours = int(time_left.total_seconds() // 3600)
-                minutes = int((time_left.total_seconds() % 3600) // 60)
-                
-                bot.answer_callback_query(
-                    call.id, 
-                    f"⏳ انتظر {hours:02d}:{minutes:02d} للمكافأة التالية", 
-                    show_alert=True
-                )
-                return
-        
-        new_balance = user['balance'] + total_bonus
-        update_user(
-            call.from_user.id,
-            balance=new_balance,
-            total_earnings=user['total_earnings'] + total_bonus,
-            last_daily_bonus=current_time.strftime('%Y-%m-%d %H:%M:%S')
-        )
-        
-        bonus_text = f"""
-🎁 <b>المكافأة اليومية!</b>
+        debug_text = f"""
+🤖 <b>Bot Debug Info</b>
 
-💰 <b>المكافأة الأساسية:</b> 0.70 Pi
-💎 <b>مكافأة الباقات:</b> +{package_bonus:.2f} Pi
-💰 <b>الإجمالي:</b> {total_bonus:.2f} Pi
+✅ <b>Status:</b> Working Perfectly
+👤 <b>User ID:</b> {user_id}
+🕒 <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}
+🔧 <b>Version:</b> 2.0
 
-💵 <b>رصيدك الجديد:</b> {new_balance:.2f} Pi
-📈 <b>قيمته:</b> {get_total_balance_value(new_balance):,.2f} USDT
-
-🕒 <b>عد للمكافأة التالية بعد 24 ساعة</b>
+🎯 <b>Send /start to test main menu</b>
         """
         
-        bot.answer_callback_query(call.id, f"🎉 تم استلام {total_bonus:.2f} Pi!")
-        bot.edit_message_text(bonus_text, call.message.chat.id, call.message.message_id)
+        bot.reply_to(message, debug_text)
+        print(f"✅ Test response sent to {user_id}")
         
     except Exception as e:
-        print(f"❌ Daily bonus error: {e}")
+        print(f"❌ Test command error: {e}")
 
 # 🔄 نظام Keep Alive
 def keep_alive():
     while True:
         try:
-            print(f"✅ Bot is alive - {time.strftime('%H:%M:%S')}")
+            print(f"❤️  Bot heartbeat - {time.strftime('%H:%M:%S')}")
+            time.sleep(300)
         except Exception as e:
-            print(f"❌ Keep-alive failed: {e}")
-        time.sleep(300)
+            print(f"❌ Keep-alive error: {e}")
 
-# 🚀 تشغيل البوت
-print("🚀 Starting Pi Network Bot with Polling...")
-keep_thread = threading.Thread(target=keep_alive, daemon=True)
-keep_thread.start()
+# 🚀 تشغيل البوت مع معالجة الأخطاء
+def start_bot():
+    try:
+        print("🔄 Starting bot polling...")
+        bot.remove_webhook()
+        time.sleep(2)
+        bot.polling(none_stop=True, timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        print(f"❌ Bot polling error: {e}")
+        print("🔄 Restarting in 30 seconds...")
+        time.sleep(30)
+        start_bot()
 
-try:
-    bot.remove_webhook()
-    time.sleep(2)
-    bot.polling(none_stop=True, timeout=60)
-except Exception as e:
-    print(f"❌ Bot polling error: {e}")
-    time.sleep(30)
+# 🎉 بدء التشغيل
+if __name__ == '__main__':
+    print("🎉 STARTING PI NETWORK BOT...")
+    
+    # تشغيل Keep Alive في thread منفصل
+    keep_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_thread.start()
+    
+    # تشغيل البوت
+    start_bot()
