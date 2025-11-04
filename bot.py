@@ -5,7 +5,6 @@ import threading
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import datetime, timedelta
 import time
-from flask import Flask, request
 import logging
 import requests
 from pymongo import MongoClient
@@ -31,6 +30,7 @@ try:
     db = client['pi_network_bot']
     users_collection = db['users']
     vip_packages_collection = db['vip_packages']
+    deposit_requests_collection = db['deposit_requests']
     print("✅ Connected to MongoDB")
 except Exception as e:
     print(f"❌ MongoDB error: {e}")
@@ -44,7 +44,7 @@ YOUR_USER_ID = 8400225549
 
 # 🔷 إعدادات Pi Network
 PI_WALLET = "0xfc712c9985507a2eb44df1ddfe7f09ff7613a19b"
-PI_PRICE = 35.50  # سعر Pi مقابل USDT
+PI_PRICE = 35.50
 LAUNCH_DATE = "31/12/2025"
 
 def is_admin(user_id):
@@ -71,7 +71,7 @@ def get_user(user_id):
                 'user_id': user_id_str,
                 'first_name': "", 
                 'username': "",
-                'balance': 10.0,  # مكافأة التسجيل 10 Pi
+                'balance': 10.0,
                 'referral_count': 0, 
                 'active_referrals': 0,
                 'total_earnings': 10.0,
@@ -84,10 +84,7 @@ def get_user(user_id):
                 'language': 'ar'
             }
             users_collection.insert_one(new_user)
-            
-            # إرسال رسالة ترحيب للمستخدم الجديد
             send_welcome_message(user_id_str)
-            
             return new_user
     except Exception as e:
         print(f"❌ Error getting user: {e}")
@@ -103,12 +100,11 @@ def update_user(user_id, **kwargs):
         return False
 
 def send_welcome_message(user_id):
-    """إرسال رسالة ترحيب للمستخدم الجديد"""
     welcome_text = """
 🎉 **مرحباً بك في مجتمع Pi Network!**
 
 🌐 **ما هي Pi Network؟**
-Pi هي عملة رقمية ثورية يمكن تعدينها من هاتفك المحمول دون استهلاك البطارية أو البيانات. أسسها فريق من خريجي جامعة ستانفورد بهدف جعل التعدين الرقمي في متناول الجميع.
+Pi هي عملة رقمية ثورية يمكن تعدينها من هاتفك المحمول دون استهلاك البطارية أو البيانات.
 
 🚀 **لماذا Pi Network؟**
 • ✅ **مجانية بالكامل** - لا تطلب أي رسوم
@@ -120,11 +116,6 @@ Pi هي عملة رقمية ثورية يمكن تعدينها من هاتفك �
 • **1 Pi = {price} USDT**
 • **التداول يبدأ رسمياً في {launch_date}**
 
-📈 **لماذا تستثمر في Pi؟**
-- مشروع مدعوم من مجتمع يضم +35 مليون مستخدم
-- نمو مستمر وقاعدة مستخدمين نشطة
-- إمكانية نمو كبيرة بعد الإطلاق الرسمي
-
 🔗 **انضم إلى الثورة الرقمية وكن جزءاً من المستقبل!**
     """.format(price=PI_PRICE, launch_date=LAUNCH_DATE)
     
@@ -134,7 +125,6 @@ Pi هي عملة رقمية ثورية يمكن تعدينها من هاتفك �
         print(f"❌ Failed to send welcome message: {e}")
 
 def handle_referral_system(message):
-    """نظام الإحالات - 20 إحالة كحد أقصى للمكافآت"""
     try:
         user_id = message.from_user.id
         command_parts = message.text.split()
@@ -145,7 +135,6 @@ def handle_referral_system(message):
                 if referrer_id != user_id:
                     referrer = get_user(referrer_id)
                     if referrer and referrer['active_referrals'] < 20:
-                        # منح مكافأة الإحالة
                         new_balance = referrer['balance'] + 0.50
                         new_active_refs = referrer['active_referrals'] + 1
                         
@@ -155,8 +144,6 @@ def handle_referral_system(message):
                             referral_count=referrer['referral_count'] + 1,
                             active_referrals=new_active_refs
                         )
-                        
-                        # إرسال إشعار للمستخدم
                         notify_referral_earned(referrer_id, new_active_refs)
             except ValueError:
                 pass
@@ -164,7 +151,6 @@ def handle_referral_system(message):
         print(f"❌ Referral error: {e}")
 
 def notify_referral_earned(user_id, referral_count):
-    """إشعار المستخدم بمكافأة إحالة جديدة"""
     notification = f"""
 🎉 **إحالة جديدة!**
 
@@ -181,7 +167,6 @@ def notify_referral_earned(user_id, referral_count):
         print(f"❌ Failed to send referral notification: {e}")
 
 def get_membership_days(user_id):
-    """حساب أيام العضوية"""
     user = get_user(user_id)
     if not user: 
         return 0, 10
@@ -194,11 +179,9 @@ def get_membership_days(user_id):
         return 1, 10
 
 def get_total_balance_value(balance):
-    """حساب القيمة الإجمالية للرصيد"""
     return balance * PI_PRICE
 
 def can_withdraw(user_id):
-    """التحقق من إمكانية السحب (10 أيام + بعد تاريخ الإطلاق)"""
     days_registered, _ = get_membership_days(user_id)
     current_date = datetime.now()
     launch_date = datetime(2025, 12, 31)
@@ -206,7 +189,6 @@ def can_withdraw(user_id):
     return days_registered >= 10 and current_date >= launch_date
 
 def show_main_menu(chat_id, message_id=None, user_id=None):
-    """عرض الواجهة الرئيسية المختصرة"""
     try:
         if not user_id: 
             return False
@@ -216,11 +198,7 @@ def show_main_menu(chat_id, message_id=None, user_id=None):
             return False
         
         days_registered, total_days = get_membership_days(user_id)
-        
-        # حساب القيمة الإجمالية
         total_value = get_total_balance_value(user_data['balance'])
-        
-        # تحديد العضوية
         membership = "🟢 مجاني"
         if user_data.get('vip_packages'):
             membership = "💎 VIP"
@@ -328,16 +306,13 @@ def handle_buy_package(call):
             bot.answer_callback_query(call.id, f"❌ رصيدك غير كافي! تحتاج {package['price']} Pi")
             return
         
-        # إرسال طلب الشراء للإدمن
         send_purchase_request(call.from_user.id, package)
-        
         bot.answer_callback_query(call.id, f"✅ تم إرسال طلب شراء {package['name']} للمسؤول")
         
     except Exception as e:
         print(f"❌ Buy package error: {e}")
 
 def send_purchase_request(user_id, package):
-    """إرسال طلب شراء الباقة للإدمن"""
     user = get_user(user_id)
     user_link = f"<a href='tg://user?id={user_id}'>{user['first_name'] or 'مستخدم'}</a>"
     
@@ -362,29 +337,33 @@ def send_purchase_request(user_id, package):
     except Exception as e:
         print(f"❌ Failed to send purchase request: {e}")
 
-# 💳 نظام الإيداع
+# 💳 نظام الإيداع - معدل لـ BEP20
 @bot.callback_query_handler(func=lambda call: call.data == "deposit")
 def handle_deposit(call):
     try:
         deposit_text = f"""
 💳 <b>نظام الإيداع</b>
 
-📍 <b>عنوان المحفظة:</b>
+📍 <b>عنوان المحفظة (BEP20):</b>
 <code>{PI_WALLET}</code>
 
-⚠️ <b>تحذير هام:</b>
-• تأكد من استخدام شبكة <b>Pi Network</b> فقط
-• <b>لا تستخدم شبكة BEP20</b> أو أي شبكة أخرى
-• أرسل المبلغ فقط إلى العنوان أعلاه
+✅ <b>تعليمات الإيداع:</b>
+• استخدم شبكة <b>BEP20 فقط</b>
+• تأكد من إرسال USDT فقط
+• الحد الأدنى: 10 USDT
 
 📋 <b>بعد الإيداع:</b>
-1. احفظ صورة التحويل كإثبات
-2. تواصل مع الدعم الفني
-3. سيتم تفعيل رصيدك خلال 24 ساعة
+1. أرسل صورة إثبات التحويل
+2. انتظر موافقة المسؤول
+3. سيتم إضافة الرصيد خلال ساعة
+
+📸 <b>لإرسال صورة الإيداع:</b>
+استخدم الأمر /deposit_proof
         """
         
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("📋 نسخ العنوان", callback_data="copy_wallet"))
+        keyboard.add(InlineKeyboardButton("📸 إرسال إثبات الإيداع", callback_data="send_deposit_proof"))
         keyboard.add(InlineKeyboardButton("🔙 رجوع", callback_data="back_to_main"))
         
         bot.edit_message_text(deposit_text, call.message.chat.id, call.message.message_id, reply_markup=keyboard)
@@ -394,6 +373,142 @@ def handle_deposit(call):
 @bot.callback_query_handler(func=lambda call: call.data == "copy_wallet")
 def handle_copy_wallet(call):
     bot.answer_callback_query(call.id, f"✅ تم نسخ العنوان: {PI_WALLET}")
+
+@bot.callback_query_handler(func=lambda call: call.data == "send_deposit_proof")
+def handle_send_deposit_proof(call):
+    try:
+        bot.answer_callback_query(call.id, "📸 أرسل صورة إثبات الإيداع الآن")
+        bot.send_message(call.message.chat.id, "📸 <b>أرسل صورة إثبات الإيداع الآن</b>\n\nاستخدم الأمر /deposit_proof أو أرسل الصورة مباشرة")
+    except Exception as e:
+        print(f"❌ Send deposit proof error: {e}")
+
+# 📸 نظام إرسال إثباتات الإيداع
+@bot.message_handler(commands=['deposit_proof'])
+def handle_deposit_proof_command(message):
+    try:
+        bot.reply_to(message, "📸 <b>أرسل صورة إثبات الإيداع الآن</b>\n\nسأقوم بإرسالها للمسؤول للموافقة")
+        bot.register_next_step_handler(message, process_deposit_proof)
+    except Exception as e:
+        print(f"❌ Deposit proof command error: {e}")
+
+def process_deposit_proof(message):
+    try:
+        if message.photo:
+            # حفظ طلب الإيداع في قاعدة البيانات
+            deposit_request = {
+                'user_id': str(message.from_user.id),
+                'first_name': message.from_user.first_name or "",
+                'username': message.from_user.username or "",
+                'photo_file_id': message.photo[-1].file_id,
+                'status': 'pending',
+                'submission_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'admin_action': None,
+                'action_date': None
+            }
+            
+            deposit_requests_collection.insert_one(deposit_request)
+            
+            # إرسال للإدمن للموافقة
+            send_deposit_for_approval(message.from_user.id, message.photo[-1].file_id)
+            
+            bot.reply_to(message, "✅ <b>تم إرسال طلب الإيداع للمسؤول</b>\n\nسيتم مراجعة طلبك والرد عليك خلال 24 ساعة")
+            
+        else:
+            bot.reply_to(message, "❌ <b>لم ترسل صورة!</b>\n\nأرسل صورة إثبات الإيداع")
+            bot.register_next_step_handler(message, process_deposit_proof)
+            
+    except Exception as e:
+        print(f"❌ Process deposit proof error: {e}")
+        bot.reply_to(message, "❌ حدث خطأ أثناء معالجة الطلب")
+
+def send_deposit_for_approval(user_id, file_id):
+    """إرسال طلب الإيداع للإدمن للموافقة"""
+    try:
+        user = get_user(user_id)
+        user_link = f"<a href='tg://user?id={user_id}'>{user['first_name'] or 'مستخدم'}</a>"
+        
+        approval_text = f"""
+🆕 <b>طلب إيداع جديد</b>
+
+👤 <b>المستخدم:</b> {user_link}
+🆔 <b>الآيدي:</b> <code>{user_id}</code>
+📅 <b>وقت الطلب:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+💵 <b>رصيده الحالي:</b> {user['balance']:.2f} Pi
+👥 <b>إحالاته:</b> {user['referral_count']}
+
+📝 <b>اختر الإجراء:</b>
+        """
+        
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        keyboard.add(
+            InlineKeyboardButton("✅ الموافقة على الإيداع", callback_data=f"approve_deposit_{user_id}"),
+            InlineKeyboardButton("❌ رفض الإيداع", callback_data=f"reject_deposit_{user_id}")
+        )
+        
+        # إرسال الصورة مع النص
+        bot.send_photo(
+            YOUR_USER_ID,
+            photo=file_id,
+            caption=approval_text,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        
+    except Exception as e:
+        print(f"❌ Send deposit for approval error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('approve_deposit_'))
+def handle_approve_deposit(call):
+    try:
+        user_id = int(call.data.replace('approve_deposit_', ''))
+        
+        # تحديث حالة الطلب في قاعدة البيانات
+        deposit_requests_collection.update_one(
+            {'user_id': str(user_id), 'status': 'pending'},
+            {'$set': {
+                'status': 'approved',
+                'admin_action': 'approved',
+                'action_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }}
+        )
+        
+        # إرسال إشعار للمستخدم
+        bot.send_message(user_id, "✅ <b>تمت الموافقة على إيداعك!</b>\n\nتم إضافة الرصيد إلى حسابك بنجاح")
+        
+        # الرد على الإدمن
+        bot.answer_callback_query(call.id, "✅ تمت الموافقة على الإيداع")
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        bot.send_message(call.message.chat.id, f"✅ <b>تمت الموافقة على إيداع المستخدم</b> {user_id}")
+        
+    except Exception as e:
+        print(f"❌ Approve deposit error: {e}")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('reject_deposit_'))
+def handle_reject_deposit(call):
+    try:
+        user_id = int(call.data.replace('reject_deposit_', ''))
+        
+        # تحديث حالة الطلب في قاعدة البيانات
+        deposit_requests_collection.update_one(
+            {'user_id': str(user_id), 'status': 'pending'},
+            {'$set': {
+                'status': 'rejected',
+                'admin_action': 'rejected',
+                'action_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }}
+        )
+        
+        # إرسال إشعار للمستخدم
+        bot.send_message(user_id, "❌ <b>تم رفض طلب الإيداع</b>\n\nيرجى التحقق من صحة المعلومات والمحاولة مرة أخرى")
+        
+        # الرد على الإدمن
+        bot.answer_callback_query(call.id, "❌ تم رفض الإيداع")
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        bot.send_message(call.message.chat.id, f"❌ <b>تم رفض إيداع المستخدم</b> {user_id}")
+        
+    except Exception as e:
+        print(f"❌ Reject deposit error: {e}")
 
 # 💰 نظام السحب
 @bot.callback_query_handler(func=lambda call: call.data == "withdraw")
@@ -449,75 +564,13 @@ def handle_withdraw(call):
     except Exception as e:
         print(f"❌ Withdraw error: {e}")
 
-# 🎁 المكافأة اليومية والتعدين
-@bot.callback_query_handler(func=lambda call: call.data == "daily_bonus")
-def handle_daily_bonus(call):
-    try:
-        user = get_user(call.from_user.id)
-        current_time = datetime.now()
-        
-        # حساب المكافأة الأساسية
-        base_bonus = 0.7  # 0.7 Pi للمستخدمين المجانيين
-        
-        # إضافة مكافآت الباقات
-        package_bonus = 0
-        if user.get('vip_packages'):
-            for package in user['vip_packages']:
-                package_bonus += package.get('daily_bonus', 0)
-        
-        total_bonus = base_bonus + package_bonus
-        
-        # التحقق من آخر مكافأة
-        if user.get('last_daily_bonus'):
-            last_bonus = datetime.strptime(user['last_daily_bonus'], '%Y-%m-%d %H:%M:%S')
-            if (current_time - last_bonus).total_seconds() < 24 * 3600:
-                next_bonus = last_bonus + timedelta(hours=24)
-                time_left = next_bonus - current_time
-                hours = int(time_left.total_seconds() // 3600)
-                minutes = int((time_left.total_seconds() % 3600) // 60)
-                
-                bot.answer_callback_query(
-                    call.id, 
-                    f"⏳ انتظر {hours:02d}:{minutes:02d} للمكافأة التالية", 
-                    show_alert=True
-                )
-                return
-        
-        # منح المكافأة
-        new_balance = user['balance'] + total_bonus
-        update_user(
-            call.from_user.id,
-            balance=new_balance,
-            total_earnings=user['total_earnings'] + total_bonus,
-            last_daily_bonus=current_time.strftime('%Y-%m-%d %H:%M:%S')
-        )
-        
-        bonus_text = f"""
-🎁 <b>المكافأة اليومية!</b>
-
-💰 <b>المكافأة الأساسية:</b> 0.70 Pi
-💎 <b>مكافأة الباقات:</b> +{package_bonus:.2f} Pi
-💰 <b>الإجمالي:</b> {total_bonus:.2f} Pi
-
-💵 <b>رصيدك الجديد:</b> {new_balance:.2f} Pi
-📈 <b>قيمته:</b> {get_total_balance_value(new_balance):,.2f} USDT
-
-🕒 <b>عد للمكافأة التالية بعد 24 ساعة</b>
-        """
-        
-        bot.answer_callback_query(call.id, f"🎉 تم استلام {total_bonus:.2f} Pi!")
-        bot.edit_message_text(bonus_text, call.message.chat.id, call.message.message_id)
-        
-    except Exception as e:
-        print(f"❌ Daily bonus error: {e}")
-
-# 👥 نظام الإحالات
+# 👥 نظام الإحالات - معدل مع رابط البوت الجديد
 @bot.callback_query_handler(func=lambda call: call.data == "referral")
 def handle_referral(call):
     try:
         user_id = call.from_user.id
         user = get_user(user_id)
-        referral_link = f"https://t.me/Usdt_Mini1Bot?start=ref{user_id}"
+        referral_link = f"https://t.me/pi_network_1bot?start=ref{user_id}"
         
         referral_text = f"""
 👥 <b>نظام الإحالات</b>
@@ -652,245 +705,81 @@ def handle_unban(message):
     except Exception as e:
         bot.reply_to(message, f"❌ خطأ: {e}")
 
-# 🎨 نظام إرسال العروض المصممة مع أزرار
-@bot.message_handler(commands=['send_design'])
-def handle_send_design(message):
-    """أمر للإدمن لإرسال عروض مصممة للجميع"""
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "❌ <b>ليس لديك صلاحية!</b>")
-        return
-    
+# 🎁 المكافأة اليومية والتعدين
+@bot.callback_query_handler(func=lambda call: call.data == "daily_bonus")
+def handle_daily_bonus(call):
     try:
-        # طلب تأكيد الإرسال للجميع
-        confirm_keyboard = InlineKeyboardMarkup()
-        confirm_keyboard.add(
-            InlineKeyboardButton("✅ نعم، أرسل للجميع", callback_data="design_confirm_all"),
-            InlineKeyboardButton("📱 اختبار للإدمن فقط", callback_data="design_test_only")
+        user = get_user(call.from_user.id)
+        current_time = datetime.now()
+        
+        base_bonus = 0.7
+        package_bonus = 0
+        if user.get('vip_packages'):
+            for package in user['vip_packages']:
+                package_bonus += package.get('daily_bonus', 0)
+        
+        total_bonus = base_bonus + package_bonus
+        
+        if user.get('last_daily_bonus'):
+            last_bonus = datetime.strptime(user['last_daily_bonus'], '%Y-%m-%d %H:%M:%S')
+            if (current_time - last_bonus).total_seconds() < 24 * 3600:
+                next_bonus = last_bonus + timedelta(hours=24)
+                time_left = next_bonus - current_time
+                hours = int(time_left.total_seconds() // 3600)
+                minutes = int((time_left.total_seconds() % 3600) // 60)
+                
+                bot.answer_callback_query(
+                    call.id, 
+                    f"⏳ انتظر {hours:02d}:{minutes:02d} للمكافأة التالية", 
+                    show_alert=True
+                )
+                return
+        
+        new_balance = user['balance'] + total_bonus
+        update_user(
+            call.from_user.id,
+            balance=new_balance,
+            total_earnings=user['total_earnings'] + total_bonus,
+            last_daily_bonus=current_time.strftime('%Y-%m-%d %H:%M:%S')
         )
         
-        total_users = users_collection.count_documents({})
-        
-        bot.reply_to(message, 
-                    f"🖼️ <b>نظام إرسال التصاميم</b>\n\n"
-                    f"👥 <b>عدد المستخدمين:</b> {total_users}\n\n"
-                    f"📝 <b>اختر طريقة الإرسال:</b>\n"
-                    f"• ✅ للجميع - يرسل لجميع المستخدمين\n"
-                    f"• 📱 اختبار - يعرض لك المعاينة فقط\n\n"
-                    f"🖼️ <b>بعد الموافقة أرسل الصورة</b>",
-                    reply_markup=confirm_keyboard)
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ <b>خطأ:</b> {e}")
+        bonus_text = f"""
+🎁 <b>المكافأة اليومية!</b>
 
-@bot.callback_query_handler(func=lambda call: call.data == "design_confirm_all")
-def handle_design_confirm_all(call):
-    """تأكيد الإرسال للجميع"""
-    try:
-        bot.answer_callback_query(call.id, "📤 جاهز لاستقبال الصورة للإرسال الجماعي...")
-        bot.edit_message_text("🖼️ <b>الإرسال للجميع ✓</b>\n\nأرسل الصورة الآن...", 
-                            call.message.chat.id, 
-                            call.message.message_id)
+💰 <b>المكافأة الأساسية:</b> 0.70 Pi
+💎 <b>مكافأة الباقات:</b> +{package_bonus:.2f} Pi
+💰 <b>الإجمالي:</b> {total_bonus:.2f} Pi
+
+💵 <b>رصيدك الجديد:</b> {new_balance:.2f} Pi
+📈 <b>قيمته:</b> {get_total_balance_value(new_balance):,.2f} USDT
+
+🕒 <b>عد للمكافأة التالية بعد 24 ساعة</b>
+        """
         
-        # تسجيل أن الإرسال للجميع
-        bot.register_next_step_handler(call.message, process_design_image, send_to_all=True)
+        bot.answer_callback_query(call.id, f"🎉 تم استلام {total_bonus:.2f} Pi!")
+        bot.edit_message_text(bonus_text, call.message.chat.id, call.message.message_id)
         
     except Exception as e:
-        bot.reply_to(call.message, f"❌ <b>خطأ:</b> {e}")
+        print(f"❌ Daily bonus error: {e}")
 
-@bot.callback_query_handler(func=lambda call: call.data == "design_test_only")
-def handle_design_test_only(call):
-    """الإرسال للإدمن فقط (معاينة)"""
-    try:
-        bot.answer_callback_query(call.id, "📱 وضع المعاينة - للإدمن فقط")
-        bot.edit_message_text("🖼️ <b>وضع المعاينة ✓</b>\n\nأرسل الصورة للعرض الخاص بك...", 
-                            call.message.chat.id, 
-                            call.message.message_id)
-        
-        # تسجيل أن الإرسال للإدمن فقط
-        bot.register_next_step_handler(call.message, process_design_image, send_to_all=False)
-        
-    except Exception as e:
-        bot.reply_to(call.message, f"❌ <b>خطأ:</b> {e}")
-
-def process_design_image(message, send_to_all=False):
-    """معالجة الصورة المرسلة من الإدمن"""
-    try:
-        if not message.photo:
-            bot.reply_to(message, "❌ <b>لم ترسل صورة! أعد استخدام الأمر /send_design</b>")
-            return
-        
-        # حفظ file_id للصورة
-        file_id = message.photo[-1].file_id
-        
-        bot.reply_to(message, "📝 <b>الآن أرسل النص التحتي للصورة</b>")
-        bot.register_next_step_handler(message, process_design_text, file_id, send_to_all)
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ <b>خطأ في معالجة الصورة:</b> {e}")
-
-def process_design_text(message, file_id, send_to_all=False):
-    """معالجة النص وإرسال العرض"""
-    try:
-        caption_text = message.text or "عرض حصري! 🎯"
-        
-        # إنشاء الأزرار
-        markup = InlineKeyboardMarkup()
-        btn_deposit = InlineKeyboardButton("💳 إيداع الآن", callback_data="deposit")
-        btn_packages = InlineKeyboardButton("💎 شراء باقة", callback_data="vip_packages")
-        markup.add(btn_deposit, btn_packages)
-        
-        if send_to_all:
-            # 🔥 الإرسال للجميع
-            all_users = list(users_collection.find({}, {'user_id': 1}))
-            total_users = len(all_users)
-            successful_sends = 0
-            
-            # إرسال للجميع
-            for user in all_users:
-                try:
-                    bot.send_photo(
-                        user['user_id'],
-                        photo=file_id,
-                        caption=caption_text,
-                        reply_markup=markup,
-                        parse_mode="HTML"
-                    )
-                    successful_sends += 1
-                    time.sleep(0.1)  # تجنب rate limits
-                except Exception as e:
-                    print(f"❌ فشل الإرسال للمستخدم {user['user_id']}: {e}")
-            
-            # تقرير النتيجة للإدمن
-            success_rate = (successful_sends / total_users) * 100 if total_users > 0 else 0
-            report_msg = f"""🎉 <b>تم الإرسال الجماعي بنجاح!</b>
-
-📊 <b>الإحصائيات:</b>
-👥 <b>إجمالي المستخدمين:</b> {total_users}
-✅ <b>تم الإرسال بنجاح:</b> {successful_sends}
-❌ <b>فشل في الإرسال:</b> {total_users - successful_sends}
-📈 <b>نسبة النجاح:</b> {success_rate:.1f}%"""
-
-            bot.send_message(message.chat.id, report_msg)
-            
-        else:
-            # 📱 الإرسال للإدمن فقط (معاينة)
-            bot.send_photo(
-                message.chat.id,
-                photo=file_id,
-                caption=caption_text,
-                reply_markup=markup,
-                parse_mode="HTML"
-            )
-            bot.reply_to(message, "✅ <b>تم عرض المعاينة بنجاح!</b>\n\nاستخدم /send_design للإرسال للجميع")
-        
-    except Exception as e:
-        bot.reply_to(message, f"❌ <b>خطأ في إرسال العرض:</b> {e}")
-
-# =============================================
-# 🔧 نظام السيرفر والويب هوك مع Keep Alive
-# =============================================
-
-app = Flask(__name__)
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """استقبال الرسائل من تليجرام"""
-    try:
-        json_data = request.get_json()
-        update = telebot.types.Update.de_json(json_data)
-        bot.process_new_updates([update])
-        return 'OK'
-    except Exception as e:
-        print(f"❌ Webhook error: {e}")
-        return 'OK'
-
-@app.route('/')
-def home():
-    return "🤖 Pi Network Bot شغال - " + time.strftime("%Y-%m-%d %H:%M:%S")
-
-@app.route('/health')
-def health():
-    return "✅ البوت بصحة جيدة"
-
-@app.route('/ping')
-def ping():
-    return "🏓 Pong - " + time.strftime("%H:%M:%S")
-
-@app.route('/set_webhook', methods=['GET'])
-def set_webhook_manual():
-    """تعيين الويب هوك يدوياً"""
-    try:
-        bot.remove_webhook()
-        time.sleep(2)
-        webhook_url = "https://your-app-name.onrender.com/webhook"
-        result = bot.set_webhook(url=webhook_url)
-        return f"✅ تم تعيين الويب هوك!<br>الرابط: {webhook_url}<br>النتيجة: {result}"
-    except Exception as e:
-        return f"❌ خطأ: {str(e)}"
-
-@app.route('/test')
-def test():
-    return "✅ البوت شغال تمام! - " + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-# 🔄 نظام الإبقاء على الخدمة نشطة - محسّن
+# 🔄 نظام Keep Alive
 def keep_alive():
-    """نظام Keep Alive لمنع البوت من النوم"""
     while True:
         try:
-            # إرسال طلب ping للموقع نفسه
-            response = requests.get('https://your-app-name.onrender.com/ping', timeout=10)
-            if response.status_code == 200:
-                print(f"✅ Keep-alive - {time.strftime('%H:%M:%S')}")
-            else:
-                print(f"⚠️ Keep-alive status: {response.status_code}")
+            print(f"✅ Bot is alive - {time.strftime('%H:%M:%S')}")
         except Exception as e:
             print(f"❌ Keep-alive failed: {e}")
-        
-        # الانتظار 5 دقائق بين كل طلب
         time.sleep(300)
 
-# 🔄 إعداد الويب هوك تلقائياً - محسّن
-def setup_webhook():
-    """إعداد الويب هوك تلقائياً مع إعادة المحاولة"""
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            time.sleep(15)  # انتظر 15 ثانية للتأكد من تشغيل السيرفر
-            print(f"🔄 جاري تعيين الويب هوك (المحاولة {attempt + 1})...")
-            
-            bot.remove_webhook()
-            time.sleep(2)
-            
-            webhook_url = "https://your-app-name.onrender.com/webhook"
-            result = bot.set_webhook(url=webhook_url)
-            
-            # تحقق من الويب هوك
-            webhook_info = bot.get_webhook_info()
-            print(f"✅ تم تعيين الويب هوك: {webhook_url}")
-            print(f"📊 معلومات الويب هوك: {webhook_info}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ فشل تعيين الويب هوك (المحاولة {attempt + 1}): {e}")
-            if attempt < max_retries - 1:
-                time.sleep(10)  # انتظر قبل إعادة المحاولة
-    return False
+# 🚀 تشغيل البوت
+print("🚀 Starting Pi Network Bot with Polling...")
+keep_thread = threading.Thread(target=keep_alive, daemon=True)
+keep_thread.start()
 
-if __name__ == '__main__':
-    print("🚀 بدء تشغيل Pi Network Bot...")
-    
-    # تشغيل نظام الإبقاء النشط
-    keep_thread = threading.Thread(target=keep_alive, daemon=True)
-    keep_thread.start()
-    
-    # محاولة إعداد الويب هوك تلقائياً
-    webhook_success = setup_webhook()
-    if not webhook_success:
-        print("⚠️ تشغيل بدون ويب هوك - استخدام polling")
-        bot.remove_webhook()
-        time.sleep(2)
-        bot.polling(none_stop=True)
-    else:
-        # تشغيل الخادم
-        port = int(os.environ.get("PORT", 8080))
-        app.run(host='0.0.0.0', port=port, debug=False)
+try:
+    bot.remove_webhook()
+    time.sleep(2)
+    bot.polling(none_stop=True, timeout=60)
+except Exception as e:
+    print(f"❌ Bot polling error: {e}")
+    time.sleep(30)
